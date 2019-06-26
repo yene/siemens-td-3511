@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
+	client "github.com/influxdata/influxdb1-client/v2"
 	"github.com/tarm/serial"
 )
 
@@ -74,6 +76,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	type Value struct {
+		Channel string
+		Unit    string
+		Value   float64
+	}
+	var values []Value
 	reader = bufio.NewReader(s)
 	for {
 		reply, err := reader.ReadBytes('\n')
@@ -93,14 +101,57 @@ func main() {
 			p := strings.Split(line, "(")
 			channel := p[0]
 			v := strings.Split(p[1], "*")
-			value := v[0]
-			unit := strings.TrimRight(v[1], ")")
-			if channel == "1.4.0" {
+
+			var value float64
+			if value, err = strconv.ParseFloat(v[0], 32); err != nil {
+				log.Println(err)
 				continue
 			}
+			unit := strings.TrimRight(v[1], ")")
 			fmt.Println(channel, value, unit)
+			values = append(values, Value{
+				Channel: channel,
+				Unit:    unit,
+				Value:   value,
+			})
 		}
 	}
-
 	s.Close()
+
+	c, err := client.NewHTTPClient(client.HTTPConfig{
+		Addr: "http://localhost:8086",
+	})
+	if err != nil {
+		fmt.Println("Error creating InfluxDB Client: ", err.Error())
+	}
+	defer c.Close()
+
+	q := client.NewQuery("CREATE DATABASE data", "", "")
+	if response, err := c.Query(q); err == nil && response.Error() == nil {
+	}
+
+	bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
+		Database:  "data",
+		Precision: "s",
+	})
+
+	for _, v := range values {
+		tags := map[string]string{
+			"channel": v.Channel,
+			"unit":    v.Unit,
+		}
+		fields := map[string]interface{}{
+			"value": v.Value,
+		}
+		pt, err := client.NewPoint("energy", tags, fields, time.Now())
+		if err != nil {
+			fmt.Println("Error: ", err.Error())
+		}
+		bp.AddPoint(pt)
+	}
+
+	err = c.Write(bp)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
