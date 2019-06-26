@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/tarm/serial"
@@ -41,12 +42,11 @@ func main() {
 		reply, err := reader.ReadBytes('\n')
 		if err != nil { // At the end, err will equal io.EOF
 			if err != io.EOF {
+				log.Println(reply, string(reply))
 				log.Println(err)
 			}
 			break
 		}
-		fmt.Println(string(reply))
-		fmt.Printf("% x", reply)
 	}
 
 	// requesting baud rate
@@ -83,8 +83,23 @@ func main() {
 			}
 			break
 		}
-		// fmt.Println(reply)
-		fmt.Println(string(reply))
+		line := string(reply)
+		line = strings.Replace(line, "\n", "", -1)
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "0.000*") || strings.Contains(line, "0.0*") {
+			continue
+		}
+		if strings.HasSuffix(line, "*kW)") || strings.HasSuffix(line, "*kWh)") {
+			p := strings.Split(line, "(")
+			channel := p[0]
+			v := strings.Split(p[1], "*")
+			value := v[0]
+			unit := strings.TrimRight(v[1], ")")
+			if channel == "1.4.0" {
+				continue
+			}
+			fmt.Println(channel, value, unit)
+		}
 	}
 
 	s.Close()
