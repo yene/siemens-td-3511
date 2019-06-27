@@ -1,6 +1,6 @@
 # Siemens TD-3511 Reader
 
-Reading the energy consumption from the TD-3511 over infrared.
+Reading the energy consumption from the TD-3511 over infrared. The meter speaks IEC 62056-21.
 
 ![image](material/td-3511.jpg)
 

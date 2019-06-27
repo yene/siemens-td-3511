@@ -17,7 +17,7 @@ import (
 func main() {
 	device := flag.String("device", "/dev/ttyUSB0", "IR read/write head")
 	flag.Parse()
-	fmt.Println("Trying connecting to", *device)
+	// fmt.Println("Trying connecting to", *device)
 	config := &serial.Config{
 		Name:        *device,
 		Baud:        300,
@@ -60,7 +60,7 @@ func main() {
 	}
 	s.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) // This sleep is documented and required.
 
 	config = &serial.Config{
 		Name:        *device,
@@ -81,7 +81,14 @@ func main() {
 		Unit    string
 		Value   float64
 	}
-	var values []Value
+	var totals []Value
+	type Month struct {
+		Channel string
+		Value   float64
+		Time    time.Time
+	}
+	var months []Month
+	dates := make(map[string]time.Time)
 	reader = bufio.NewReader(s)
 	for {
 		reply, err := reader.ReadBytes('\n')
@@ -94,22 +101,67 @@ func main() {
 		line := string(reply)
 		line = strings.Replace(line, "\n", "", -1)
 		line = strings.TrimSpace(line)
-		if strings.Contains(line, "0.000*") || strings.Contains(line, "0.0*") {
+
+		// My 1.4.0 seems to report a weird value.
+		if strings.Contains(line, "0.000*") || strings.Contains(line, "0.0*") || strings.HasPrefix(line, "1.4.0(") {
 			continue
 		}
-		if strings.HasSuffix(line, "*kW)") || strings.HasSuffix(line, "*kWh)") {
+		// date entries: 0.1.2*30(19-04-01 00:00)
+		if strings.HasPrefix(line, "0.1.2*") {
+			p := strings.Split(line, "*")
+			v := strings.Split(p[1], "(")
+			id := v[0]
+			datestring := strings.TrimRight(v[1], ")")
+			layout := "06-01-02 15:04"
+			t, err := time.Parse(layout, datestring)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			// Subtract one month: because the total gets recorded at the beginning of a new month.
+			dates[id] = t.AddDate(0, -1, 0)
+			continue
+		}
+
+		// monthly kWh entries
+		if strings.HasPrefix(line, "1.8.0*") || strings.HasPrefix(line, "1.8.1*") || strings.HasPrefix(line, "1.8.2*") {
+			p := strings.Split(line, "*")
+			channel := p[0]
+			v := strings.Split(p[1], "(")
+			id := v[0]
+			valuestring := strings.TrimRight(v[1], ")")
+
+			var value float64
+			if value, err = strconv.ParseFloat(valuestring, 64); err != nil {
+				log.Println(err)
+				continue
+			}
+			t, ok := dates[id]
+			if !ok {
+				log.Println("No date found for", id)
+				continue
+			}
+			// fmt.Println(t.Format("Jan 2006"), channel, value, "kWh")
+			months = append(months, Month{
+				Channel: channel,
+				Value:   value,
+				Time:    t,
+			})
+		}
+
+		// Current Consumption
+		if strings.Contains(line, "1.7.0") {
 			p := strings.Split(line, "(")
 			channel := p[0]
 			v := strings.Split(p[1], "*")
 
 			var value float64
-			if value, err = strconv.ParseFloat(v[0], 32); err != nil {
+			if value, err = strconv.ParseFloat(v[0], 64); err != nil {
 				log.Println(err)
 				continue
 			}
 			unit := strings.TrimRight(v[1], ")")
-			fmt.Println(channel, value, unit)
-			values = append(values, Value{
+			totals = append(totals, Value{
 				Channel: channel,
 				Unit:    unit,
 				Value:   value,
@@ -135,7 +187,7 @@ func main() {
 		Precision: "s",
 	})
 
-	for _, v := range values {
+	for _, v := range totals {
 		tags := map[string]string{
 			"channel": v.Channel,
 			"unit":    v.Unit,
@@ -146,6 +198,42 @@ func main() {
 		pt, err := client.NewPoint("energy", tags, fields, time.Now())
 		if err != nil {
 			fmt.Println("Error: ", err.Error())
+		}
+		bp.AddPoint(pt)
+	}
+
+	err = c.Write(bp)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// The monthly recorded data always contains the total, we store the diff.
+	var previousMonth float64
+	for i := len(months) - 1; i >= 0; i-- {
+		v := months[i]
+
+		// Every time the channel changes we reset previousMonth.
+		if (i+1)%len(dates) == 0 {
+			previousMonth = v.Value
+			continue
+		}
+
+		diff := v.Value - previousMonth
+		previousMonth = v.Value
+
+		tags := map[string]string{
+			"channel": v.Channel,
+			"unit":    "kWh",
+		}
+		fields := map[string]interface{}{
+			"value": diff,
+		}
+		pt, err := client.NewPoint("months", tags, fields, v.Time)
+
+		fmt.Println(v.Time.Format("Jan 2006"), v.Channel, v.Value, diff)
+		if err != nil {
+			fmt.Println("Error: ", err.Error())
+			continue
 		}
 		bp.AddPoint(pt)
 	}

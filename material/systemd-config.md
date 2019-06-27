@@ -40,3 +40,5 @@ WantedBy=timers.target
 `sudo systemctl daemon-reload`
 `sudo systemctl enable readvalues.timer`
 `sudo systemctl start readvalues.timer`
+
+Get timer status with: `systemctl list-timers --all`
