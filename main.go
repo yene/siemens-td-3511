@@ -88,6 +88,7 @@ func main() {
 		Time    time.Time
 	}
 	var months []Month
+	var totalPreviousMonth float64
 	dates := make(map[string]time.Time)
 	reader = bufio.NewReader(s)
 	for {
@@ -115,7 +116,7 @@ func main() {
 			layout := "06-01-02 15:04"
 			t, err := time.Parse(layout, datestring)
 			if err != nil {
-				log.Println(err)
+				log.Println("Failed to parse month date", err)
 				continue
 			}
 			// Subtract one month: because the total gets recorded at the beginning of a new month.
@@ -147,10 +148,13 @@ func main() {
 				Value:   value,
 				Time:    t,
 			})
+			if value > totalPreviousMonth {
+				totalPreviousMonth = value
+			}
 		}
 
 		// Current Consumption
-		if strings.Contains(line, "1.7.0") {
+		if strings.HasPrefix(line, "1.7.0(") {
 			p := strings.Split(line, "(")
 			channel := p[0]
 			v := strings.Split(p[1], "*")
@@ -167,6 +171,32 @@ func main() {
 				Value:   value,
 			})
 		}
+
+		// Current Total Consumption
+		// "1.8.0(" Is so that it does not match monthly records.
+		if strings.HasPrefix(line, "1.8.0(") {
+			p := strings.Split(line, "(")
+			channel := p[0]
+			v := strings.Split(p[1], "*")
+
+			var value float64
+			if value, err = strconv.ParseFloat(v[0], 64); err != nil {
+				log.Println(err)
+				continue
+			}
+			unit := strings.TrimRight(v[1], ")")
+			totals = append(totals, Value{
+				Channel: channel,
+				Unit:    unit,
+				Value:   value,
+			})
+			totals = append(totals, Value{
+				Channel: "ongoing",
+				Unit:    unit,
+				Value:   value,
+			})
+		}
+
 	}
 	s.Close()
 
@@ -188,6 +218,9 @@ func main() {
 	})
 
 	for _, v := range totals {
+		if v.Channel == "ongoing" { // Subtract previous month of the Energy total.
+			v.Value = v.Value - totalPreviousMonth
+		}
 		tags := map[string]string{
 			"channel": v.Channel,
 			"unit":    v.Unit,
@@ -230,7 +263,7 @@ func main() {
 		}
 		pt, err := client.NewPoint("months", tags, fields, v.Time)
 
-		fmt.Println(v.Time.Format("Jan 2006"), v.Channel, v.Value, diff)
+		// fmt.Println(v.Time.Format("Jan 2006"), v.Channel, v.Value, diff)
 		if err != nil {
 			fmt.Println("Error: ", err.Error())
 			continue
