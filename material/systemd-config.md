@@ -29,8 +29,7 @@ Setup systemd, timer for the service:
 Description=Run readvalues
 
 [Timer]
-OnBootSec=3min
-OnUnitActiveSec=15min
+OnCalendar=*:0/5
 Unit=readvalues.service
 
 [Install]
